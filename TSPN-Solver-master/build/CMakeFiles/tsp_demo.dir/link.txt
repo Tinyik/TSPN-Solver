@@ -1,0 +1,1 @@
+/usr/bin/g++   -std=c++0x -Wall -O3 -g -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk -Wl,-search_paths_first -Wl,-headerpad_max_install_names  CMakeFiles/tsp_demo.dir/src/tsp_demo.cpp.o CMakeFiles/tsp_demo.dir/src/tsp.cpp.o CMakeFiles/tsp_demo.dir/src/tour.cpp.o  -o ../bin/tsp_demo  
