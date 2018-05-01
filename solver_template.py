@@ -86,26 +86,31 @@ def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, filena
     signal.alarm(0)
     try:
         # Use DP
-        # truncated_g = shortest_dist[countries_idx][:, countries_idx].tolist()
-        # tour = tsp(truncated_g)
-        # complete_visits = [countries_idx[i] for i in tour]
-        raise TimeoutException
+        if cy:
+            truncated_g = shortest_dist[countries_idx][:, countries_idx].tolist()
+            tour = tsp(truncated_g)
+            complete_visits = [countries_idx[i] for i in tour]
+        else:
+            raise TimeoutException
     except TimeoutException:
         # Use approximation
         print("=============================DP DIDN'T WORK=============================")
-        signal.alarm(0)
 
         signal.alarm(10)
         try:
-            if len(countries_to_visit) == 1:
-                p = countries_to_visit
-                closed_walk = [list_of_kingdom_names[j] for j in p]
+            if len(countries_idx) == 1:
+                if cy:
+                    closed_walk = [list_of_kingdom_names[j] for j in countries_idx]
+                else:
+                    closed_walk = [starting_kingdom] + [list_of_kingdom_names[j] for j in countries_idx] + [starting_kingdom]
                 conquered_kingdoms = countries_to_visit
-
                 return closed_walk, conquered_kingdoms
             if len(countries_to_visit) == 2:
                 p = recon[countries_idx[0]][countries_idx[1]]
                 p = p + p[:-1][::-1]
+                complete_visits = [starting_kingdom] + [list_of_kingdom_names[j] for j in p]
+                complete_visits += [complete_visits[0]]
+                p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
                 closed_walk = [list_of_kingdom_names[j] for j in p]
                 conquered_kingdoms = countries_to_visit
 
@@ -143,11 +148,13 @@ def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, filena
             return []
         else:
             # Approximation worked
+            signal.alarm(0)
             complete_visits += [complete_visits[0]]
             p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
 
     else:
         # DP Worked
+        signal.alarm(0)
         complete_visits += [complete_visits[0]]
         p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
 
