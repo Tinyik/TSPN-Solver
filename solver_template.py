@@ -64,26 +64,32 @@ def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, params
     sc = setcover.SetCover(binary, cost)
     solution, time_used = sc.SolveSCP()
 
-    contries_to_visit = []
-    contries_idx = []
+    countries_to_visit = []
+    countries_idx = []
     for i,c in enumerate(list_of_kingdom_names):
         if sc.s[i]:
-            contries_to_visit.append(c)
-            contries_idx.append(i)
+            countries_to_visit.append(c)
+            countries_idx.append(i)
 
-    truncated_g = shortest_dist[contries_idx][:, contries_idx]
+    truncated_g = shortest_dist[countries_idx][:, countries_idx]
+    #print(len(countries_to_visit),'!!')
+    if len(countries_to_visit) == 1:
+        p = countries_to_visit
+    if len(countries_to_visit) == 2:
+        p = recon[countries_idx[0]][countries_idx[1]] 
+        p = p + p[:-1][::-1]
+    else:
+        matrix_sym = atsp_tsp(truncated_g, strategy="avg")
+        outf = "/tmp/myroute.tsp"
+        with open(outf, 'w') as dest:
+            dest.write(dumps_matrix(matrix_sym, name="My Route"))
+        tour = run(outf, start=list_of_kingdom_names.index(starting_kingdom), solver="LKH")
+        complete_visits = [countries_idx[i] for i in tour['tour']]
+        complete_visits += [complete_visits[0]]
 
-    matrix_sym = atsp_tsp(truncated_g, strategy="avg")
-    outf = "/tmp/myroute.tsp"
-    with open(outf, 'w') as dest:
-        dest.write(dumps_matrix(matrix_sym, name="My Route"))
-    tour = run(outf, start=list_of_kingdom_names.index(starting_kingdom), solver="LKH")
-    complete_visits = [contries_idx[i] for i in tour['tour']]
-    complete_visits += [complete_visits[0]]
-
-    p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
+        p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
     closed_walk = [list_of_kingdom_names[j] for j in p]
-    conquered_kingdoms = contries_to_visit
+    conquered_kingdoms = countries_to_visit
 
     return closed_walk, conquered_kingdoms
 
