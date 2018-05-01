@@ -10,15 +10,23 @@ from pytsp import atsp_tsp, run, dumps_matrix
 from functools import reduce
 import numpy as np
 import scipy.sparse.csgraph
-
+import signal
+from main import *
 """
 ======================================================================
   Complete the following function.
 ======================================================================
 """
+class TimeoutException(Exception):   # Custom exception class
+    pass
 
+def timeout_handler(signum, frame):   # Custom signal handler
+    raise TimeoutException
 
-def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, params=[]):
+# Change the behavior of SIGALRM
+signal.signal(signal.SIGALRM, timeout_handler)
+
+def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, filename, params=[]):
     """
     Write your algorithm here.
     Input:
@@ -66,32 +74,123 @@ def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, params
 
     countries_to_visit = []
     countries_idx = []
+    starting_index = list_of_kingdom_names.index(starting_kingdom)
+    cy = False
     for i,c in enumerate(list_of_kingdom_names):
         if sc.s[i]:
             countries_to_visit.append(c)
             countries_idx.append(i)
+            if starting_index == i:
+                cy = True
+    
+    signal.alarm(0)
+    try:
+        # Use DP
+        # truncated_g = shortest_dist[countries_idx][:, countries_idx].tolist()
+        # tour = tsp(truncated_g)
+        # complete_visits = [countries_idx[i] for i in tour]
+        raise TimeoutException
+    except TimeoutException:
+        # Use approximation
+        print("=============================DP DIDN'T WORK=============================")
+        signal.alarm(0)
 
-    truncated_g = shortest_dist[countries_idx][:, countries_idx]
-    #print(len(countries_to_visit),'!!')
-    if len(countries_to_visit) == 1:
-        p = countries_to_visit
-    if len(countries_to_visit) == 2:
-        p = recon[countries_idx[0]][countries_idx[1]] 
-        p = p + p[:-1][::-1]
+        signal.alarm(10)
+        try:
+            if len(countries_to_visit) == 1:
+                p = countries_to_visit
+                closed_walk = [list_of_kingdom_names[j] for j in p]
+                conquered_kingdoms = countries_to_visit
+
+                return closed_walk, conquered_kingdoms
+            if len(countries_to_visit) == 2:
+                p = recon[countries_idx[0]][countries_idx[1]]
+                p = p + p[:-1][::-1]
+                closed_walk = [list_of_kingdom_names[j] for j in p]
+                conquered_kingdoms = countries_to_visit
+
+                return closed_walk, conquered_kingdoms
+            else:
+                truncated_g = shortest_dist[countries_idx][:, countries_idx]
+                if cy:
+                    tr_starting_index = 0
+                    for i in range(truncated_g.shape[0]):
+                        if truncated_g[i][0] == starting_index:
+                            tr_starting_index = i
+                    #print(len(countries_to_visit),'!!')
+                    matrix_sym = atsp_tsp(truncated_g, strategy="avg")
+                    outf = "/tmp/myroute.tsp"
+                    with open(outf, 'w') as dest:
+                        dest.write(dumps_matrix(matrix_sym, name="My Route"))
+                    tour = run(outf, start=tr_starting_index, solver="LKH")
+                    complete_visits = [countries_idx[i] for i in tour['tour']]
+                else:
+                    arr = [shortest_dist[starting_index][i] for i in countries_idx]
+                    nearest_o = arr.index(min(arr))
+                    nearest_n = 0
+                    for i in range(truncated_g.shape[0]):
+                        if truncated_g[i][0] == nearest_o:
+                            nearest_n = i
+                    matrix_sym = atsp_tsp(truncated_g, strategy="avg")
+                    outf = "/tmp/myroute.tsp"
+                    with open(outf, 'w') as dest:
+                        dest.write(dumps_matrix(matrix_sym, name="My Route"))
+                    tour = run(outf, start=nearest_n, solver="LKH")
+                    complete_visits = [starting_index] + [countries_idx[i] for i in tour['tour']]
+        except TimeoutException:
+            # Both didn't work
+            print("=============================BOTH DIDN'T WORK=============================", filename)
+            return []
+        else:
+            # Approximation worked
+            complete_visits += [complete_visits[0]]
+            p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
+
     else:
-        matrix_sym = atsp_tsp(truncated_g, strategy="avg")
-        outf = "/tmp/myroute.tsp"
-        with open(outf, 'w') as dest:
-            dest.write(dumps_matrix(matrix_sym, name="My Route"))
-        tour = run(outf, start=list_of_kingdom_names.index(starting_kingdom), solver="LKH")
-        complete_visits = [countries_idx[i] for i in tour['tour']]
+        # DP Worked
         complete_visits += [complete_visits[0]]
-
         p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
+
     closed_walk = [list_of_kingdom_names[j] for j in p]
     conquered_kingdoms = countries_to_visit
+    print(closed_walk,'cw')
+    print(starting_kingdom,'starting kingdom')
+    print(countries_to_visit,'to_visit')
 
     return closed_walk, conquered_kingdoms
+
+
+    # #print(len(countries_to_visit),'!!')
+    # # if len(countries_to_visit) == 1:
+    # #     p = countries_to_visit
+    # # if len(countries_to_visit) == 2:
+    # #     p = recon[countries_idx[0]][countries_idx[1]] 
+    # #     p = p + p[:-1][::-1]
+    # # else:
+    #     # matrix_sym = atsp_tsp(truncated_g, strategy="avg")
+    #     # outf = "/tmp/myroute.tsp"
+    #     # with open(outf, 'w') as dest:
+    #     #     dest.write(dumps_matrix(matrix_sym, name="My Route"))
+
+    #     # signal.alarm(20)
+    #     # try:
+    #     #     tour = run(outf, start=list_of_kingdom_names.index(starting_kingdom), solver="LKH")
+    #     # except TimeoutException:
+
+
+    #     # complete_visits = [countries_idx[i] for i in tour['tour']]
+    #     # complete_visits += [complete_visits[0]]
+    # tour = tsp(truncated_g)
+    # print(tour,'tour')
+    # complete_visits = [countries_idx[i] for i in tour]
+    # p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
+    # closed_walk = [list_of_kingdom_names[j] for j in p]
+    # print(closed_walk)
+
+    # conquered_kingdoms = countries_to_visit
+    # print(conquered_kingdoms)
+
+    # return closed_walk, conquered_kingdoms
 
 """
 ======================================================================
@@ -114,7 +213,7 @@ def solve_from_file(input_file, output_directory, params=[]):
     input_data = utils.read_file(input_file)
     number_of_kingdoms, list_of_kingdom_names, starting_kingdom, _ = data_parser(input_data)
     adjacency_matrix = matrix(input_file)
-    closed_walk, conquered_kingdoms = solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, adjacency_matrix, params=params)
+    closed_walk, conquered_kingdoms = solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, adjacency_matrix, params=params, filename=input_file)
 
     basename, filename = os.path.split(input_file)
     output_filename = utils.input_to_output(filename)
