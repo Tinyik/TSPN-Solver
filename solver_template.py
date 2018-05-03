@@ -11,6 +11,7 @@ from functools import reduce
 import numpy as np
 import scipy.sparse.csgraph
 import signal
+from gurobipy import *
 from main import *
 """
 ======================================================================
@@ -39,7 +40,7 @@ def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, filena
     """
     # return closed_walk, conquered_kingdoms
     gnx =nx.from_numpy_matrix(g)
-    paths = list(nx.all_pairs_shortest_path(gnx))
+    paths = list(nx.all_pairs_dijkstra_path(gnx))
     recon = []
     for p in paths:
         a = []
@@ -48,156 +49,145 @@ def solve(number_of_kingdoms, list_of_kingdom_names, starting_kingdom, g, filena
         recon.append(a)
     shortest_dist= scipy.sparse.csgraph.floyd_warshall(g)
 
-    complete_g = np.zeros_like(g)
-    for i in range(g.shape[0]):
-        for j in range(g.shape[1]):
-            if g[i,j] == np.inf:
-                complete_g[i,j] = shortest_dist[i,j]
+    # complete_g = np.zeros_like(g)
+    # for i in range(g.shape[0]):
+    #     for j in range(g.shape[1]):
+    #         if g[i,j] == np.inf:
+    #             complete_g[i,j] = shortest_dist[i,j]
+    #         else:
+    #             complete_g[i,j] = g[i,j]
+    # for kk in range(complete_g.shape[0]):
+    #     complete_g[kk, kk]=0
+
+    # #setcover
+    # binarize = lambda x : int(x != 0)
+    # binarize = np.vectorize(binarize)
+    # binary = binarize(g)
+    # for i in range(number_of_kingdoms):
+    #     binary[i][i] = 1
+
+    #========================================#
+    #Dominating set using Integer Programming
+    def get_neighbors_and_self(i):
+            if conquer_cost[i] == 0:
+                return np.nonzero(g[i])[0].tolist() + [i]
             else:
-                complete_g[i,j] = g[i,j]
-    for kk in range(complete_g.shape[0]):
-        complete_g[kk, kk]=0 
+                return np.nonzero(g[i])[0].tolist()
 
-    #setcover
-    binarize = lambda x : int(x != 0)
-    binarize = np.vectorize(binarize)
-    binary = binarize(g)
-    for i in range(number_of_kingdoms):
-        binary[i][i] = 1
+    m = Model()
+    edge_vars={}
+    n = len(list_of_kingdom_names)
+    conquer_cost = np.diag(g)
+    for i in range(n):
+        for j in range(i+1):
+            edge_vars[i,j] = m.addVar(obj=1, vtype=GRB.BINARY, name='is_path_taken_'+str(i)+'_'+str(j))
+            edge_vars[j,i] = edge_vars[i,j]
 
-    cost = np.diag(g)
-    cost = cost/ np.median(cost)
+    for i in range(n):
+        edge_vars[i] = m.addVar(obj=1, vtype=GRB.BINARY, name='is_conquered_' + str(i))
 
+    for i in range(n):
+        neighbor = get_neighbors_and_self(i)
+        m.addConstr(quicksum(edge_vars[j] for j in neighbor) >= 1)
 
-    sc = setcover.SetCover(binary, cost)
-    solution, time_used = sc.SolveSCP()
+    m.update()
+    start = list_of_kingdom_names.index(starting_kingdom)
+    dist_from_start = [shortest_dist[start, i] for i in range(n)]
+    dist_from_start = dist_from_start / np.average(dist_from_start)
+    avg_dist = np.sum(shortest_dist, axis= 1)
+    avg_dist = avg_dist/np.average(avg_dist)
+    avg_conquer_cost = np.average(conquer_cost)
 
-    countries_to_visit = []
-    countries_idx = []
-    starting_index = list_of_kingdom_names.index(starting_kingdom)
-    cy = False
-    for i,c in enumerate(list_of_kingdom_names):
-        if sc.s[i]:
-            countries_to_visit.append(c)
-            countries_idx.append(i)
-            if starting_index == i:
-                cy = True
-    
-    signal.alarm(0)
-    try:
-        # Use DP
-        if cy:
-            truncated_g = shortest_dist[countries_idx][:, countries_idx].tolist()
-            tour = tsp(truncated_g)
-            complete_visits = [countries_idx[i] for i in tour]
-        else:
-            raise TimeoutException
-    except TimeoutException:
-        # Use approximation
-        print("=============================DP DIDN'T WORK=============================")
+    closed_walk_dict = {}
+    conquered_kingdoms_dict = {}
+    cost_dict = {}
+    for alpha in [0, 0.01, 0.1, 1, 10, 50]:
+        for beta in [0, 0.01, 0.1, 1, 10, 50]:
+            print('-------------------- alpha ',alpha, ' beta ', beta,'------------------------')
+            m.setObjective(quicksum(conquer_cost[j]*edge_vars[j] + 
+                        avg_conquer_cost*edge_vars[j]*(alpha*dist_from_start[j]+ beta*avg_dist[j]) for j in range(n)), GRB.MINIMIZE)
+            m._vars = edge_vars
+            #m.params.LazyConstraints = 1
+            m.optimize()
+            conquered = m.getAttr('x', edge_vars)
 
-        signal.alarm(10)
-        try:
+            should_conquer = [int(conquered[i]) for i in range(n)]
+            countries_to_visit = []
+            countries_idx = []
+            cy = False
+
+            for i,c in enumerate(list_of_kingdom_names):
+                if should_conquer[i]:
+                    countries_to_visit.append(c)
+                    countries_idx.append(i)
+                    if start == i:
+                        cy = True
+
+            if not cy:
+                countries_idx.append(start)
+
+            #Conquer own country and be done
             if len(countries_idx) == 1:
-                if cy:
-                    closed_walk = [list_of_kingdom_names[j] for j in countries_idx]
-                else:
-                    closed_walk = [starting_kingdom] + [list_of_kingdom_names[j] for j in countries_idx] + [starting_kingdom]
+                closed_walk = [list_of_kingdom_names[j] for j in countries_idx]
+                assert closed_walk[0] == starting_kingdom
                 conquered_kingdoms = countries_to_visit
-                return closed_walk, conquered_kingdoms
-            if len(countries_to_visit) == 2:
+
+                closed_walk_dict[(alpha, beta)] = closed_walk
+                conquered_kingdoms_dict[(alpha, beta)] = conquered_kingdoms
+                total_cost = sum([conquer_cost[list_of_kingdom_names.index(c)] for c in conquered_kingdoms])
+                print('total cost', total_cost)
+                cost_dict[alpha, beta] = total_cost
+
+            elif len(countries_idx) == 2:
+                if countries_idx[1] == start:
+                    countries_idx = countries_idx[::-1]
                 p = recon[countries_idx[0]][countries_idx[1]]
                 p = p + p[:-1][::-1]
-                complete_visits = [starting_kingdom] + [list_of_kingdom_names[j] for j in p]
-                complete_visits += [complete_visits[0]]
-                p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
                 closed_walk = [list_of_kingdom_names[j] for j in p]
                 conquered_kingdoms = countries_to_visit
 
-                return closed_walk, conquered_kingdoms
+                closed_walk_dict[(alpha, beta)] = closed_walk
+                conquered_kingdoms_dict[(alpha, beta)] = conquered_kingdoms
+
+                travel_cost = sum([g[p[i],p[i+1]]for i in range(len(p)-1)])
+                total_cost = travel_cost + sum([conquer_cost[list_of_kingdom_names.index(c)] for c in conquered_kingdoms])
+                print('total cost', total_cost)
+                cost_dict[alpha, beta] = total_cost
+
             else:
                 truncated_g = shortest_dist[countries_idx][:, countries_idx]
-                if cy:
-                    tr_starting_index = 0
-                    for i in range(truncated_g.shape[0]):
-                        if truncated_g[i][0] == starting_index:
-                            tr_starting_index = i
-                    #print(len(countries_to_visit),'!!')
-                    matrix_sym = atsp_tsp(truncated_g, strategy="avg")
-                    outf = "/tmp/myroute.tsp"
-                    with open(outf, 'w') as dest:
-                        dest.write(dumps_matrix(matrix_sym, name="My Route"))
-                    tour = run(outf, start=tr_starting_index, solver="LKH")
-                    complete_visits = [countries_idx[i] for i in tour['tour']]
-                else:
-                    arr = [shortest_dist[starting_index][i] for i in countries_idx]
-                    nearest_o = arr.index(min(arr))
-                    nearest_n = 0
-                    for i in range(truncated_g.shape[0]):
-                        if truncated_g[i][0] == nearest_o:
-                            nearest_n = i
-                    matrix_sym = atsp_tsp(truncated_g, strategy="avg")
-                    outf = "/tmp/myroute.tsp"
-                    with open(outf, 'w') as dest:
-                        dest.write(dumps_matrix(matrix_sym, name="My Route"))
-                    tour = run(outf, start=nearest_n, solver="LKH")
-                    complete_visits = [starting_index] + [countries_idx[i] for i in tour['tour']]
-        except TimeoutException:
-            # Both didn't work
-            print("=============================BOTH DIDN'T WORK=============================", filename)
-            return []
-        else:
-            # Approximation worked
-            signal.alarm(0)
-            complete_visits += [complete_visits[0]]
-            p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
+                tr_starting_index = countries_idx.index(start)
+                    
+                matrix_sym = atsp_tsp(truncated_g, strategy="avg")
+                outf = "/tmp/myroute.tsp"
+                with open(outf, 'w') as dest:
+                    dest.write(dumps_matrix(matrix_sym, name="My Route"))
+                tour = run(outf, start=tr_starting_index, solver="LKH")
+                complete_visits = [countries_idx[i] for i in tour['tour']]
 
-    else:
-        # DP Worked
-        signal.alarm(0)
-        complete_visits += [complete_visits[0]]
-        p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
+                complete_visits += [complete_visits[0]]
+                p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(len(complete_visits) -1)])
+                closed_walk = [list_of_kingdom_names[j] for j in p]
+                conquered_kingdoms = countries_to_visit
+                print('starting kingdom', starting_kingdom)
 
-    closed_walk = [list_of_kingdom_names[j] for j in p]
-    conquered_kingdoms = countries_to_visit
-    print(closed_walk,'cw')
-    print(starting_kingdom,'starting kingdom')
-    print(countries_to_visit,'to_visit')
+                closed_walk_dict[(alpha, beta)] = closed_walk
+                conquered_kingdoms_dict[(alpha, beta)] = conquered_kingdoms
+
+                travel_cost = sum([g[p[i],p[i+1]]for i in range(len(p)-1)])
+                total_cost = travel_cost + sum([conquer_cost[list_of_kingdom_names.index(c)] for c in conquered_kingdoms])
+                print('total cost', total_cost)
+                cost_dict[alpha, beta] = total_cost
+
+    #calculate costs
+    alpha, beta = min(cost_dict.items(), key=lambda key: cost_dict[key[0]])[0]
+    print(alpha, beta,'!!')
+    closed_walk = closed_walk_dict[alpha, beta]
+    conquered_kingdoms = conquered_kingdoms_dict[alpha, beta]
 
     return closed_walk, conquered_kingdoms
 
 
-    # #print(len(countries_to_visit),'!!')
-    # # if len(countries_to_visit) == 1:
-    # #     p = countries_to_visit
-    # # if len(countries_to_visit) == 2:
-    # #     p = recon[countries_idx[0]][countries_idx[1]] 
-    # #     p = p + p[:-1][::-1]
-    # # else:
-    #     # matrix_sym = atsp_tsp(truncated_g, strategy="avg")
-    #     # outf = "/tmp/myroute.tsp"
-    #     # with open(outf, 'w') as dest:
-    #     #     dest.write(dumps_matrix(matrix_sym, name="My Route"))
-
-    #     # signal.alarm(20)
-    #     # try:
-    #     #     tour = run(outf, start=list_of_kingdom_names.index(starting_kingdom), solver="LKH")
-    #     # except TimeoutException:
-
-
-    #     # complete_visits = [countries_idx[i] for i in tour['tour']]
-    #     # complete_visits += [complete_visits[0]]
-    # tour = tsp(truncated_g)
-    # print(tour,'tour')
-    # complete_visits = [countries_idx[i] for i in tour]
-    # p = [complete_visits[0]] + reduce(lambda x,y: x+y, [recon[complete_visits[i]][complete_visits[i+1]][1:] for i in range(1, len(complete_visits) -1)])
-    # closed_walk = [list_of_kingdom_names[j] for j in p]
-    # print(closed_walk)
-
-    # conquered_kingdoms = countries_to_visit
-    # print(conquered_kingdoms)
-
-    # return closed_walk, conquered_kingdoms
 
 """
 ======================================================================
@@ -216,7 +206,7 @@ def matrix(input_file):
 
 def solve_from_file(input_file, output_directory, params=[]):
     print('Processing', input_file)
-    
+
     input_data = utils.read_file(input_file)
     number_of_kingdoms, list_of_kingdom_names, starting_kingdom, _ = data_parser(input_data)
     adjacency_matrix = matrix(input_file)
